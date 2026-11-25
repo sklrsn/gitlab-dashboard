@@ -1,0 +1,13 @@
+/bin/
+web/node_modules/
+web/dist/*
+!web/dist/.keep
+web/tsconfig.tsbuildinfo
+.env
+*.env.local
+deploy/docker/.env
+deploy/docker/secrets/
+deploy/docker/certs/
+*.pem
+*.key
+.DS_Store

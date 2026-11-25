@@ -1,0 +1,6 @@
+bin/
+web/node_modules/
+deploy/docker/.env
+deploy/docker/secrets/
+deploy/docker/certs/
+.git/

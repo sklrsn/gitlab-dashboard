@@ -1,0 +1,43 @@
+# Run from this directory:
+#   cp ../env.example .env          # set GITLAB_URL etc. (leave GITLAB_TOKEN empty)
+#   mkdir -p secrets certs
+#   printf '%s' 'glpat-…' > secrets/gitlab_token && chmod 600 secrets/gitlab_token
+#   cat server.crt server.key > certs/site.pem      # cert + key for HAProxy
+#   docker compose up -d --build
+
+services:
+  app:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    image: gitlab-dashboard:local
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      LISTEN_ADDR: ":8080"
+      GITLAB_TOKEN_FILE: /run/secrets/gitlab_token
+      # GITLAB_CA_FILE: /etc/gitlab-dashboard/internal-ca.pem
+    secrets:
+      - gitlab_token
+    # volumes:
+    #   - ./internal-ca.pem:/etc/gitlab-dashboard/internal-ca.pem:ro
+    #   - ./logo.svg:/etc/gitlab-dashboard/logo.svg:ro
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    expose: ["8080"]
+
+  haproxy:
+    image: haproxy:3.2-alpine
+    restart: unless-stopped
+    depends_on: [app]
+    ports:
+      - "80:8080"
+      - "443:8443"
+    volumes:
+      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+      - ./certs:/usr/local/etc/haproxy/certs:ro
+
+secrets:
+  gitlab_token:
+    file: ./secrets/gitlab_token

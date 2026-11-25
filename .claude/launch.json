@@ -1,0 +1,18 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "dashboard-dev",
+      "runtimeExecutable": "/usr/bin/env",
+      "runtimeArgs": [
+        "GITLAB_URL=http://localhost:8929",
+        "GITLAB_TOKEN=dev-token",
+        "DEFAULT_SCOPE=group:platform",
+        "APP_TITLE=Pipelines",
+        "LISTEN_ADDR=localhost:8080",
+        "./bin/gitlab-dashboard-darwin-arm64"
+      ],
+      "port": 8080
+    }
+  ]
+}
