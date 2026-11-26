@@ -3,7 +3,7 @@
 A read-only, Blue Ocean–style pipeline dashboard for self-hosted GitLab. It shows top-level pipelines for a group or project. Expanding a pipeline shows the child pipelines and downstream (multi-project) pipelines it started, to any depth.
 
 - **One static binary.** The UI, fonts and icons are embedded. It needs nothing at runtime except network access to GitLab.
-- **GitLab is the only data source.** No database (in v1). Answers are reused for a few seconds so many open browsers don't multiply load on GitLab.
+- **GitLab is the only data source.** No database. Answers are reused for a few seconds so many open browsers don't multiply load on GitLab.
 - **Read-only.** Every pipeline links to GitLab, where people run, retry or cancel pipelines with their own permissions.
 
 ## How the views work
@@ -120,5 +120,7 @@ All calls are reads:
 
 ## Roadmap
 
-- **v2:** alert rules (pipeline name / project / branch → email, later Slack/SMS) via GitLab pipeline webhooks; admin-only settings page; encrypted SQLite for settings.
-- **v3:** Blue Ocean–style stage/job graph and log viewer.
+No further work is planned for now.
+
+- **Alerts** (notifications via GitLab pipeline webhooks): dropped, to keep the dashboard stateless with no login or database.
+- **Stage/job graph and live log tail:** on hold. If it's picked up again, the first decision is who may read job logs, since the dashboard has no login and logs in GitLab need Reporter access.
