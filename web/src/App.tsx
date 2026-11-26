@@ -1,28 +1,37 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { IconAlertTriangle, IconExternalLink, IconRefresh } from "@tabler/icons-react";
-import { api, type AppConfig, type Pipeline, type Scope } from "./api";
+import { api, type AppConfig, type Pipeline, type Scope, type ScopeItem } from "./api";
 import { ScopePicker } from "./ScopePicker";
 import { PipelineRow, type ChildState } from "./PipelineRow";
+import { GroupedView, groupByOptions, windowOptions } from "./GroupedView";
+import { useChildTree } from "./childTree";
 import { isActive, statusFilterOptions } from "./status";
 import { timeAgo } from "./format";
 
-type View = { scope?: Scope; status: string; ref: string };
+type View = { scope?: Scope; status: string; ref: string; by: string; window: string };
 
 const PAGE = 20;
 const FAST_POLL = 10_000;
 const SLOW_POLL = 30_000;
+const APP_NAME = "Pipelines";
 
 function readView(def?: Scope): View {
   const q = new URLSearchParams(location.search);
   const group = q.get("group");
   const project = q.get("project");
   const scope: Scope | undefined = project ? { kind: "project", path: project } : group ? { kind: "group", path: group } : def;
-  return { scope, status: q.get("status") ?? "", ref: q.get("ref") ?? "" };
+  let by = q.get("by") ?? "";
+  if (!groupByOptions.some((o) => o.value === by) || (by === "project" && scope?.kind !== "group")) by = "";
+  let window = q.get("window") ?? "100";
+  if (!windowOptions.some((o) => o.value === window)) window = "100";
+  return { scope, status: q.get("status") ?? "", ref: q.get("ref") ?? "", by, window };
 }
 
 function writeView(v: View, push: boolean) {
   const q = new URLSearchParams();
   if (v.scope) q.set(v.scope.kind, v.scope.path);
+  if (v.by) q.set("by", v.by);
+  if (v.by && v.window !== "100") q.set("window", v.window);
   if (v.status) q.set("status", v.status);
   if (v.ref) q.set("ref", v.ref);
   const url = q.size ? `?${q}` : location.pathname;
@@ -42,7 +51,8 @@ function anyActive(rows: Pipeline[], kids: Record<string, ChildState>) {
 export function App() {
   const [config, setConfig] = useState<AppConfig>();
   const [configErr, setConfigErr] = useState("");
-  const [view, setView] = useState<View>({ status: "", ref: "" });
+  const [view, setView] = useState<View>({ status: "", ref: "", by: "", window: "100" });
+  const [scopeInfo, setScopeInfo] = useState<ScopeItem>();
   const [refDraft, setRefDraft] = useState("");
   const [rows, setRows] = useState<Pipeline[]>([]);
   const [cursor, setCursor] = useState<string>();
@@ -53,29 +63,30 @@ export function App() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [updatedAt, setUpdatedAt] = useState<number>();
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [children, setChildren] = useState<Record<string, ChildState>>({});
+  const [refreshKey, setRefreshKey] = useState(0);
   const [now, setNow] = useState(Date.now());
   const gen = useRef(0);
-  const expandedPipelines = useRef(new Map<string, Pipeline>());
+  const tree = useChildTree();
+  const { reset: resetTree, reloadOpen } = tree;
+  const grouped = view.by !== "";
 
   useEffect(() => {
     api
       .config()
       .then((c) => {
         setConfig(c);
-        document.title = c.title;
         const v = readView(c.defaultScope);
         setView(v);
         setRefDraft(v.ref);
         writeView(v, false);
       })
       .catch((e) => setConfigErr(e.message));
-    const onPop = () => setView((cur) => {
-      const v = readView(cur.scope);
-      setRefDraft(v.ref);
-      return v;
-    });
+    const onPop = () =>
+      setView((cur) => {
+        const v = readView(cur.scope);
+        setRefDraft(v.ref);
+        return v;
+      });
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
@@ -85,19 +96,28 @@ export function App() {
     return () => clearInterval(t);
   }, []);
 
-  const loadChildren = useCallback(async (p: Pipeline, g: number) => {
-    setChildren((c) => ({ ...c, [p.key]: { ...c[p.key], loading: true } }));
-    try {
-      const items = await api.children(p);
-      if (g !== gen.current) return;
-      setChildren((c) => ({ ...c, [p.key]: { loading: false, items } }));
-    } catch (e) {
-      if (g !== gen.current) return;
-      setChildren((c) => ({ ...c, [p.key]: { ...c[p.key], loading: false, error: (e as Error).message } }));
+  // The title is the chosen group or project's GitLab name.
+  const scopeKind = view.scope?.kind;
+  const scopePath = view.scope?.path;
+  useEffect(() => {
+    setScopeInfo(undefined);
+    if (!scopeKind || !scopePath) {
+      document.title = APP_NAME;
+      return;
     }
-  }, []);
+    document.title = `${scopePath} · ${APP_NAME}`;
+    const ctrl = new AbortController();
+    api
+      .scope({ kind: scopeKind, path: scopePath }, ctrl.signal)
+      .then((s) => {
+        setScopeInfo(s);
+        document.title = `${s.name} · ${APP_NAME}`;
+      })
+      .catch(() => {}); // the list shows GitLab's error; the title falls back to the path
+    return () => ctrl.abort();
+  }, [scopeKind, scopePath]);
 
-  // Fresh load whenever the scope or filters change.
+  // Fresh flat-list load whenever the scope or filters change.
   useEffect(() => {
     const g = ++gen.current;
     setRows([]);
@@ -107,10 +127,8 @@ export function App() {
     setPages(1);
     setWarnings([]);
     setError("");
-    setExpanded(new Set());
-    setChildren({});
-    expandedPipelines.current.clear();
-    if (!view.scope) return;
+    resetTree();
+    if (!view.scope || view.by) return;
     setLoading(true);
     api
       .pipelines(view.scope, { status: view.status, ref: view.ref, limit: PAGE })
@@ -124,11 +142,11 @@ export function App() {
       })
       .catch((e) => g === gen.current && setError(e.message))
       .finally(() => g === gen.current && setLoading(false));
-  }, [view]);
+  }, [view, resetTree]);
 
   const refresh = useCallback(async () => {
     const scope = view.scope;
-    if (!scope) return;
+    if (!scope || view.by) return;
     const g = gen.current;
     try {
       const pg = await api.pipelines(scope, { status: view.status, ref: view.ref, limit });
@@ -143,16 +161,16 @@ export function App() {
       setWarnings(pg.warnings ?? []);
       setError("");
       setUpdatedAt(Date.now());
-      await Promise.all([...expandedPipelines.current.values()].map((p) => loadChildren(p, g)));
+      await reloadOpen();
     } catch (e) {
       if (g === gen.current) setError((e as Error).message);
     }
-  }, [view, limit, pages, loadChildren]);
+  }, [view, limit, pages, reloadOpen]);
 
   // Poll quickly while something is running, slowly otherwise; pause in background tabs.
   useEffect(() => {
-    if (!view.scope) return;
-    const delay = anyActive(rows, children) ? FAST_POLL : SLOW_POLL;
+    if (!view.scope || grouped) return;
+    const delay = anyActive(rows, tree.children) ? FAST_POLL : SLOW_POLL;
     let t = setTimeout(function tick() {
       if (document.hidden) t = setTimeout(tick, delay);
       else refresh();
@@ -165,7 +183,7 @@ export function App() {
       clearTimeout(t);
       document.removeEventListener("visibilitychange", onVis);
     };
-  }, [view.scope, rows, children, refresh, updatedAt]);
+  }, [view.scope, grouped, rows, tree.children, refresh, updatedAt]);
 
   const loadMore = async () => {
     const scope = view.scope;
@@ -196,21 +214,9 @@ export function App() {
     }
   };
 
-  const toggle = (p: Pipeline) => {
-    const next = new Set(expanded);
-    if (next.has(p.key)) {
-      next.delete(p.key);
-      expandedPipelines.current.delete(p.key);
-    } else {
-      next.add(p.key);
-      expandedPipelines.current.set(p.key, p);
-      loadChildren(p, gen.current);
-    }
-    setExpanded(next);
-  };
-
   const update = (patch: Partial<View>, push = false) => {
     const v = { ...view, ...patch };
+    if (v.by === "project" && v.scope?.kind !== "group") v.by = "";
     writeView(v, push);
     setView(v);
   };
@@ -219,7 +225,7 @@ export function App() {
     config && view.scope
       ? view.scope.kind === "project"
         ? `${config.gitlabUrl}/${view.scope.path}/-/pipelines`
-        : `${config.gitlabUrl}/${view.scope.path}`
+        : (scopeInfo?.webUrl ?? `${config.gitlabUrl}/${view.scope.path}`)
       : undefined;
 
   return (
@@ -227,10 +233,9 @@ export function App() {
       <header className="topbar">
         <div className="brand">
           {config?.hasLogo && <img src="/logo" alt="" className="logo" />}
-          <span className="app-title">{config?.title ?? ""}</span>
+          <ScopePicker value={view.scope} name={scopeInfo?.name} onChange={(s) => update({ scope: s }, true)} />
         </div>
         <div className="topbar-right">
-          <ScopePicker value={view.scope} onChange={(s) => update({ scope: s }, true)} />
           {scopeUrl && (
             <a className="btn-primary" href={scopeUrl} target="_blank" rel="noopener noreferrer">
               <IconExternalLink size={15} aria-hidden /> Open in GitLab
@@ -241,6 +246,27 @@ export function App() {
 
       {view.scope && (
         <div className="filters">
+          <label className="field">
+            <span>Group by</span>
+            <select value={view.by} onChange={(e) => update({ by: e.target.value }, true)}>
+              {groupByOptions
+                .filter((o) => !o.groupOnly || view.scope?.kind === "group")
+                .map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+            </select>
+          </label>
+          {grouped && (
+            <select value={view.window} onChange={(e) => update({ window: e.target.value })} aria-label="Window">
+              {windowOptions.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          )}
           <select value={view.status} onChange={(e) => update({ status: e.target.value })} aria-label="Status">
             {statusFilterOptions.map((o) => (
               <option key={o.value} value={o.value}>
@@ -256,10 +282,16 @@ export function App() {
             onBlur={() => refDraft.trim() !== view.ref && update({ ref: refDraft.trim() })}
             placeholder="Branch or tag, e.g. main"
             aria-label="Branch or tag"
+            title="Matches the pipeline's exact ref. Merge request pipelines run on refs/merge-requests/<number>/merge (or /head), so a branch name finds only its branch pipelines."
           />
           <span className="spacer" />
           {updatedAt && <span className="dim small">updated {timeAgo(new Date(updatedAt).toISOString(), now)}</span>}
-          <button className="icon-btn" onClick={refresh} aria-label="Refresh now" title="Refresh now">
+          <button
+            className="icon-btn"
+            onClick={() => (grouped ? setRefreshKey((k) => k + 1) : refresh())}
+            aria-label="Refresh now"
+            title="Refresh now"
+          >
             <IconRefresh size={16} />
           </button>
         </div>
@@ -267,49 +299,63 @@ export function App() {
 
       <main>
         {configErr && <div className="banner error">{configErr}</div>}
-        {error && (
-          <div className="banner error">
-            <IconAlertTriangle size={16} aria-hidden /> {error}
-          </div>
-        )}
-        {warnings.map((w) => (
-          <div key={w} className="banner warn">
-            {w}
-          </div>
-        ))}
 
         {!view.scope && config && (
           <div className="empty">
             <h2>Pick a group or project</h2>
-            <p>Use the selector at the top right to choose what to watch. Your choice stays in the address bar, so you can bookmark or share it.</p>
+            <p>Use the selector at the top left to choose what to watch. Your choice stays in the address bar, so you can bookmark or share it.</p>
           </div>
         )}
 
-        {view.scope && (
-          <div className="list" role="list">
-            {rows.map((p) => (
-              <PipelineRow
-                key={p.key}
-                p={p}
-                depth={0}
-                showProject={view.scope?.kind === "group"}
-                expanded={expanded}
-                children={children}
-                onToggle={toggle}
-                now={now}
-              />
+        {view.scope && grouped && (
+          <GroupedView
+            scope={view.scope}
+            by={view.by}
+            window={view.window}
+            status={view.status}
+            gitRef={view.ref}
+            now={now}
+            refreshKey={refreshKey}
+            onUpdated={setUpdatedAt}
+          />
+        )}
+
+        {view.scope && !grouped && (
+          <>
+            {error && (
+              <div className="banner error">
+                <IconAlertTriangle size={16} aria-hidden /> {error}
+              </div>
+            )}
+            {warnings.map((w) => (
+              <div key={w} className="banner warn">
+                {w}
+              </div>
             ))}
-            {!loading && !error && rows.length === 0 && <div className="row note">No pipelines match these filters.</div>}
-            {loading && <div className="row note">Loading pipelines…</div>}
-          </div>
-        )}
-
-        {hasMore && !loading && (
-          <div className="more">
-            <button className="btn-secondary" onClick={loadMore}>
-              Load more
-            </button>
-          </div>
+            <div className="list" role="list">
+              {rows.map((p) => (
+                <PipelineRow
+                  key={p.key}
+                  p={p}
+                  depth={0}
+                  showProject={view.scope?.kind === "group"}
+                  expanded={tree.expanded}
+                  children={tree.children}
+                  onToggle={tree.toggle}
+                  now={now}
+                />
+              ))}
+              {!loading && !error && rows.length === 0 && <div className="row note">No pipelines match these filters.</div>}
+              {loading && <div className="row note">Loading pipelines…</div>}
+            </div>
+            {hasMore && !loading && (
+              <div className="more">
+                <button className="btn-secondary" onClick={loadMore}>
+                  Load more
+                </button>
+              </div>
+            )}
+          </>
         )}
       </main>
     </div>

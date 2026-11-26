@@ -75,15 +75,19 @@ func TestProjectPagePagination(t *testing.T) {
 	if len(first.Pipelines) < 20 || !first.HasMore || first.NextCursor == "" {
 		t.Fatalf("page 1: %d rows, hasMore=%v cursor=%q", len(first.Pipelines), first.HasMore, first.NextCursor)
 	}
-	second, err := svc.ProjectPage(ctx, "platform/api", Filter{}, first.NextCursor)
-	if err != nil {
-		t.Fatal(err)
+	all, pg, pages := first.Pipelines, first, 1
+	for pg.HasMore {
+		next, err := svc.ProjectPage(ctx, "platform/api", Filter{}, pg.NextCursor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(next.Pipelines) > 0 && next.Pipelines[0].ID >= all[len(all)-1].ID {
+			t.Fatalf("page %d overlaps the previous one", pages+1)
+		}
+		all, pg, pages = append(all, next.Pipelines...), next, pages+1
 	}
-	if second.HasMore || len(first.Pipelines)+len(second.Pipelines) != 42 {
-		t.Fatalf("want 42 top-level pipelines over 2 pages, got %d+%d hasMore=%v", len(first.Pipelines), len(second.Pipelines), second.HasMore)
-	}
-	if second.Pipelines[0].ID >= first.Pipelines[len(first.Pipelines)-1].ID {
-		t.Error("page 2 overlaps page 1")
+	if len(all) != 48 || pages < 2 {
+		t.Fatalf("want 48 top-level pipelines over several pages, got %d over %d", len(all), pages)
 	}
 }
 
@@ -137,8 +141,8 @@ func TestGroupPageMergesProjects(t *testing.T) {
 	if len(got) != 20 || !pg.HasMore {
 		t.Errorf("want 20 rows and more available, got %d hasMore=%v", len(got), pg.HasMore)
 	}
-	if got[0] != 48222 {
-		t.Errorf("want subgroup project pipeline 48222 first, got %d", got[0])
+	if got[0] != 48225 || !has(pg.Pipelines, 48222) {
+		t.Errorf("want newest 48225 first and the subgroup project's 48222 included, got %v", got)
 	}
 	if has(pg.Pipelines, 48204) {
 		t.Error("downstream of a pipeline in the same group should be nested, not top level")
@@ -158,8 +162,8 @@ func TestGroupPageMergesProjects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(all.Pipelines) != 48 || all.HasMore {
-		t.Errorf("limit 100 should return all 48: %d rows, hasMore=%v", len(all.Pipelines), all.HasMore)
+	if len(all.Pipelines) != 56 || all.HasMore {
+		t.Errorf("limit 100 should return all 56: %d rows, hasMore=%v", len(all.Pipelines), all.HasMore)
 	}
 }
 

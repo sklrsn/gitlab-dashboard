@@ -42,8 +42,16 @@ type Pipeline struct {
 	Bridges  []Bridge
 }
 
+// MR is a merge request the fake knows, keyed by project in Server.MRs.
+type MR struct {
+	IID            int64
+	Title          string
+	Source, Target string
+}
+
 type Server struct {
 	Token string
+	MRs   map[string][]MR
 	// Hidden projects exist but the token can't read them (GraphQL omits them).
 	Hidden map[string]bool
 
@@ -55,7 +63,7 @@ type Server struct {
 }
 
 func New(token string) *Server {
-	return &Server{Token: token, Hidden: map[string]bool{}, pipelines: map[int64]*Pipeline{}, Calls: map[string]int{}}
+	return &Server{Token: token, MRs: map[string][]MR{}, Hidden: map[string]bool{}, pipelines: map[int64]*Pipeline{}, Calls: map[string]int{}}
 }
 
 func (s *Server) AddProject(path string) { s.projects = append(s.projects, path) }
@@ -113,6 +121,61 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		for _, p := range s.projects {
 			if !s.Hidden[p] && strings.Contains(p, q.Get("search")) {
 				out = append(out, project(p, len(out)+1))
+			}
+		}
+		writeJSON(w, out)
+	case len(parts) == 2 && parts[0] == "groups":
+		s.count("rest:group")
+		if !contains(s.groups, parts[1]) {
+			http.Error(w, `{"message":"404 Group Not Found"}`, http.StatusNotFound)
+			return
+		}
+		writeJSON(w, map[string]any{"id": 1, "full_path": parts[1], "full_name": titleName(parts[1]), "web_url": "http://gitlab.test/groups/" + parts[1]})
+	case len(parts) == 2 && parts[0] == "projects":
+		s.count("rest:project")
+		if s.Hidden[parts[1]] || !contains(s.projects, parts[1]) {
+			http.Error(w, `{"message":"404 Project Not Found"}`, http.StatusNotFound)
+			return
+		}
+		m := project(parts[1], 1)
+		m["name_with_namespace"] = titleName(parts[1])
+		writeJSON(w, m)
+	case len(parts) == 3 && parts[0] == "projects" && parts[2] == "pipelines":
+		s.count("rest:pipelines")
+		if s.Hidden[parts[1]] || !contains(s.projects, parts[1]) {
+			http.Error(w, `{"message":"404 Project Not Found"}`, http.StatusNotFound)
+			return
+		}
+		page, _ := strconv.Atoi(q.Get("page"))
+		per, _ := strconv.Atoi(q.Get("per_page"))
+		page, per = max(page, 1), max(per, 20)
+		var list []*Pipeline
+		s.mu.Lock()
+		for _, p := range s.pipelines {
+			if p.Project == parts[1] && (q.Get("name") == "" || p.Name == q.Get("name")) {
+				list = append(list, p)
+			}
+		}
+		s.mu.Unlock()
+		sort.Slice(list, func(i, j int) bool { return list[i].ID > list[j].ID })
+		out := []map[string]any{}
+		for _, p := range list[min((page-1)*per, len(list)):min(page*per, len(list))] {
+			out = append(out, map[string]any{"id": p.ID, "iid": p.IID, "project_id": 1, "name": nilIfEmpty(p.Name), "status": p.Status,
+				"source": p.Source, "ref": p.Ref, "sha": p.SHA, "created_at": p.Created,
+				"web_url": fmt.Sprintf("http://gitlab.test/%s/-/pipelines/%d", p.Project, p.ID)})
+		}
+		writeJSON(w, out)
+	case len(parts) == 3 && parts[0] == "projects" && parts[2] == "merge_requests":
+		s.count("rest:mergeRequests")
+		want := map[string]bool{}
+		for _, v := range q["iids[]"] {
+			want[v] = true
+		}
+		out := []map[string]any{}
+		for _, mr := range s.MRs[parts[1]] {
+			if want[strconv.FormatInt(mr.IID, 10)] {
+				out = append(out, map[string]any{"id": 5000 + mr.IID, "iid": mr.IID, "title": mr.Title, "source_branch": mr.Source,
+					"target_branch": mr.Target, "web_url": fmt.Sprintf("http://gitlab.test/%s/-/merge_requests/%d", parts[1], mr.IID)})
 			}
 		}
 		writeJSON(w, out)
@@ -298,6 +361,22 @@ func (s *Server) get(id int64) *Pipeline {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.pipelines[id]
+}
+
+// titleName turns "platform/infra" into "Platform / Infra", like GitLab display names.
+func titleName(path string) string {
+	segs := strings.Split(path, "/")
+	for i, s := range segs {
+		segs[i] = strings.ToUpper(s[:1]) + s[1:]
+	}
+	return strings.Join(segs, " / ")
+}
+
+func nilIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }
 
 func contains(list []string, v string) bool {

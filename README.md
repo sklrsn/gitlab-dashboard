@@ -14,7 +14,25 @@ A read-only, Blue Ocean–style pipeline dashboard for self-hosted GitLab. It sh
 | Group (`?group=platform`) | Newest pipelines across the group's most recently active projects (subgroups included, `GROUP_FANOUT_LIMIT`, default 50), merged by pipeline ID. Downstream pipelines whose parent is in the same group are nested under that parent rather than listed twice. The group view shows at most 100 rows; pick a single project to page further back. |
 | Expanded row | Child pipelines, named by `workflow: name` or else by the trigger job that started them. Also shows trigger jobs that haven't started a pipeline yet (manual/skipped), and a "limited" row for downstream pipelines in projects the token can't read. |
 
-Filters (status, branch/tag) and the chosen scope are kept in the URL, so views can be bookmarked and shared. The list refreshes every 10 s while something is running and every 30 s otherwise, and pauses in background tabs.
+The title bar shows the chosen group or project's GitLab name; click it to switch to another one.
+
+### Group by
+
+The **Group by** dropdown turns the list into one summary row per group: latest status, the last 10 runs as dots (oldest to newest), how many passed, average duration and when it last ran. Groups whose latest run failed come first. Click a group to see its runs; each run still expands into its children. When a group's runs span several branches, it first shows one summary row per branch (collapsed); a group with a single branch opens straight to its runs. Grouping by Branch / tag has no second level.
+
+Merge request pipelines run on `refs/merge-requests/<number>/merge` (or `/head`). The dashboard shows their source branch instead, with a `!<number>` chip linking to the merge request, and groups them with that branch's other pipelines. The source branch comes from one batched lookup per project, cached for 5 minutes; if the merge request can't be read, the pipeline shows `!<number>`. The branch filter still matches GitLab's raw ref, so a branch name finds only that branch's own pipelines.
+
+| Group by | One group per |
+|---|---|
+| Workflow name | `workflow: name`; unnamed pipelines become "(unnamed) · push", "(unnamed) · schedule", … |
+| Child pipeline | child or downstream pipeline name, across every parent; each run links back to its parent |
+| Branch / tag | ref |
+| Trigger source | push, schedule, merge request, API, … |
+| Project | project (group view only) |
+
+Groups are built from a **window**: the last 100 pipelines, the last 24 hours, or the last 7 days. The dashboard reads at most 1,000 pipelines per window (300 per project in a group view) and child pipelines for at most 200 parents; when a window holds more, a banner says which period the groups cover. Workflow groups in a single project can load older runs beyond the window ("Load older runs"), with fewer details per row. Grouped views refresh every 30 s.
+
+Filters (status, branch/tag), the grouping, the window and the chosen scope are kept in the URL, so views can be bookmarked and shared. The list refreshes every 10 s while something is running and every 30 s otherwise, and pauses in background tabs.
 
 ## GitLab token
 
@@ -36,8 +54,7 @@ All settings are environment variables. See [`deploy/env.example`](deploy/env.ex
 | `GITLAB_CA_FILE` | | PEM CA bundle for an internally signed GitLab certificate |
 | `LISTEN_ADDR` | `:8080` | listen address |
 | `TLS_CERT_FILE`, `TLS_KEY_FILE` | | serve HTTPS directly (no reverse proxy) |
-| `APP_TITLE` | `Pipelines` | title bar and tab name |
-| `LOGO_FILE` | | logo shown next to the title |
+| `LOGO_FILE` | | logo shown left of the group/project name |
 | `DEFAULT_SCOPE` | | `group:<path>` or `project:<path>` shown when the URL has none |
 | `GROUP_FANOUT_LIMIT` | `50` | projects read for the group view |
 | `CACHE_TTL` | `10s` | how long GitLab answers are reused |
@@ -99,6 +116,7 @@ All calls are reads:
 - GraphQL `project.pipelines` and `project.pipeline(iid).downstream` for pipeline lists, stages, upstream/downstream links
 - REST `GET /projects/:id/pipelines/:id/bridges` to name children by trigger job and find unstarted/hidden ones
 - REST `GET /groups/:id/projects`, `GET /groups`, `GET /projects` for the group view and the scope picker
+- REST `GET /groups/:id`, `GET /projects/:id` for the title, `GET /projects/:id/pipelines?name=` for older runs of a workflow, and `GET /projects/:id/merge_requests?iids[]=` for the source branch of merge request pipelines
 
 ## Roadmap
 

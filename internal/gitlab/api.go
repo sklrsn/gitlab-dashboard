@@ -238,3 +238,63 @@ func (c *Client) SearchProjects(ctx context.Context, search string, limit int) (
 	err := c.REST(ctx, "projects", q, &out)
 	return out, err
 }
+
+// GetGroup returns one group's display name and URL.
+func (c *Client) GetGroup(ctx context.Context, fullPath string) (Group, error) {
+	var out Group
+	err := c.REST(ctx, "groups/"+ProjectID(fullPath), url.Values{"with_projects": {"false"}}, &out)
+	return out, err
+}
+
+// GetProject returns one project's display name and URL.
+func (c *Client) GetProject(ctx context.Context, fullPath string) (Project, error) {
+	var out Project
+	err := c.REST(ctx, "projects/"+ProjectID(fullPath), nil, &out)
+	return out, err
+}
+
+// RESTPipeline is the short pipeline record from the REST list endpoint.
+type RESTPipeline struct {
+	ID        int64      `json:"id"`
+	IID       int64      `json:"iid"`
+	Name      string     `json:"name"`
+	Status    string     `json:"status"`
+	Source    string     `json:"source"`
+	Ref       string     `json:"ref"`
+	SHA       string     `json:"sha"`
+	WebURL    string     `json:"web_url"`
+	CreatedAt *time.Time `json:"created_at"`
+}
+
+// PipelinesByName lists a project's pipelines with this exact name, newest first.
+func (c *Client) PipelinesByName(ctx context.Context, fullPath, name string, page, perPage int) ([]RESTPipeline, error) {
+	var out []RESTPipeline
+	q := url.Values{
+		"name":     {name},
+		"order_by": {"id"},
+		"sort":     {"desc"},
+		"page":     {strconv.Itoa(page)},
+		"per_page": {strconv.Itoa(perPage)},
+	}
+	err := c.REST(ctx, "projects/"+ProjectID(fullPath)+"/pipelines", q, &out)
+	return out, err
+}
+
+type MergeRequest struct {
+	IID          int64  `json:"iid"`
+	Title        string `json:"title"`
+	SourceBranch string `json:"source_branch"`
+	TargetBranch string `json:"target_branch"`
+	WebURL       string `json:"web_url"`
+}
+
+// MergeRequestsByIID fetches up to 100 of a project's merge requests by IID.
+func (c *Client) MergeRequestsByIID(ctx context.Context, fullPath string, iids []int64) ([]MergeRequest, error) {
+	var out []MergeRequest
+	q := url.Values{"per_page": {"100"}}
+	for _, iid := range iids {
+		q.Add("iids[]", strconv.FormatInt(iid, 10))
+	}
+	err := c.REST(ctx, "projects/"+ProjectID(fullPath)+"/merge_requests", q, &out)
+	return out, err
+}

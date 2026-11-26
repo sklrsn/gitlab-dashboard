@@ -29,7 +29,7 @@ dev-fake:
 	go run ./cmd/fakegitlab
 
 dev-server:
-	GITLAB_URL=http://localhost:8929 GITLAB_TOKEN=dev-token DEFAULT_SCOPE=group:platform APP_TITLE="Pipelines (dev)" go run ./cmd/gitlab-dashboard
+	GITLAB_URL=http://localhost:8929 GITLAB_TOKEN=dev-token DEFAULT_SCOPE=group:platform go run ./cmd/gitlab-dashboard
 
 dev-ui:
 	cd web && npm run dev

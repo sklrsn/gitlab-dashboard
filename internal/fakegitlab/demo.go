@@ -49,13 +49,32 @@ func Demo(token string, now time.Time) *Server {
 			Stages: []Stage{{"build", "success"}, {"test", st}}})
 	}
 
+	// Earlier nightly runs, one a day before the history above, each with two
+	// child pipelines. IDs grow with time, as in GitLab.
+	for d := range 6 {
+		id := int64(48070 + 4*(5-d))
+		kid := id + 1
+		st, tests := "success", "success"
+		if d == 1 || d == 4 {
+			st, tests = "failed", "failed"
+		}
+		at := ago(time.Duration(63+24*d) * time.Hour)
+		add(&Pipeline{ID: id, Project: "platform/api", Name: "Nightly release", Source: "schedule", Status: st, Ref: "main",
+			Created: at, Started: at, Duration: 1180 + 37*d, Commit: fmt.Sprintf("Nightly build %d", d), Stages: []Stage{{"build", "success"}, {"test", tests}},
+			Bridges: []Bridge{{600 + id, "build-images", "success", kid}, {601 + id, "integration-tests", tests, kid + 1}}})
+		add(&Pipeline{ID: kid, Project: "platform/api", Source: "parent_pipeline", Upstream: id, Status: "success", Ref: "main",
+			Created: at, Started: at, Duration: 240 + d, Commit: fmt.Sprintf("Nightly build %d", d), Stages: []Stage{{"build", "success"}}})
+		add(&Pipeline{ID: kid + 1, Project: "platform/api", Name: "Integration tests", Source: "parent_pipeline", Upstream: id, Status: tests, Ref: "main",
+			Created: at, Started: at, Duration: 600 + 9*d, Commit: fmt.Sprintf("Nightly build %d", d), Stages: []Stage{{"test", tests}}})
+	}
+
 	// A finished nightly with three children, one in another project.
 	add(&Pipeline{ID: 48201, Project: "platform/api", Name: "Nightly release", Source: "schedule", Status: "success", Ref: "main",
 		Created: ago(3 * time.Hour), Started: ago(3 * time.Hour), Duration: 1260, Commit: "Bump version to 2.8.0", Stages: ok,
 		Bridges: []Bridge{{701, "build-images", "success", 48202}, {702, "integration-tests", "success", 48203}, {703, "deploy-staging", "success", 48204}}})
 	add(&Pipeline{ID: 48202, Project: "platform/api", Source: "parent_pipeline", Upstream: 48201, Status: "success", Ref: "main",
 		Created: ago(3 * time.Hour), Started: ago(3 * time.Hour), Duration: 250, Commit: "Bump version to 2.8.0", Stages: []Stage{{"build", "success"}, {"push", "success"}}})
-	add(&Pipeline{ID: 48203, Project: "platform/api", Source: "parent_pipeline", Upstream: 48201, Status: "success", Ref: "main",
+	add(&Pipeline{ID: 48203, Project: "platform/api", Name: "Integration tests", Source: "parent_pipeline", Upstream: 48201, Status: "success", Ref: "main",
 		Created: ago(3 * time.Hour), Started: ago(3 * time.Hour), Duration: 610, Commit: "Bump version to 2.8.0", Stages: []Stage{{"test", "success"}}})
 	add(&Pipeline{ID: 48204, Project: "platform/deploy", Name: "Deploy staging", Source: "pipeline", Upstream: 48201, Status: "success", Ref: "main",
 		Created: ago(150 * time.Minute), Started: ago(150 * time.Minute), Duration: 190, Commit: "Deploy api 2.8.0", Stages: []Stage{{"deploy", "success"}, {"verify", "success"}}})
@@ -95,5 +114,18 @@ func Demo(token string, now time.Time) *Server {
 		Commit: "Update Go dependencies", Stages: []Stage{{"build", "created"}, {"test", "created"}}})
 	add(&Pipeline{ID: 48222, Project: "platform/infra/terraform", Name: "Terraform plan", Status: "manual", Ref: "main", Created: ago(25 * time.Minute),
 		Started: ago(25 * time.Minute), Duration: 96, User: "erin", Commit: "Add NAT gateway", Stages: []Stage{{"plan", "success"}, {"apply", "manual"}}})
+
+	// Merge request pipelines: merged results for !42 (with a child), and one
+	// for !77, a merge request the fake doesn't know (lookup falls back to "!77").
+	s.MRs["platform/web"] = []MR{{42, "Fix token refresh", "feat/auth", "main"}}
+	add(&Pipeline{ID: 48223, Project: "platform/web", Source: "merge_request_event", Status: "success", Ref: "refs/merge-requests/42/merge",
+		Created: ago(40 * time.Second), Started: ago(40 * time.Second), Duration: 30, User: "carol", Commit: "Merge branch 'feat/auth' into 'main'",
+		Stages: []Stage{{"build", "success"}, {"test", "success"}}, Bridges: []Bridge{{741, "frontend-tests", "success", 48224}}})
+	add(&Pipeline{ID: 48224, Project: "platform/web", Source: "parent_pipeline", Upstream: 48223, Status: "success", Ref: "refs/merge-requests/42/merge",
+		Created: ago(35 * time.Second), Started: ago(35 * time.Second), Duration: 20, User: "carol", Commit: "Merge branch 'feat/auth' into 'main'",
+		Stages: []Stage{{"unit", "success"}}})
+	add(&Pipeline{ID: 48225, Project: "platform/cli", Source: "merge_request_event", Status: "failed", Ref: "refs/merge-requests/77/head",
+		Created: ago(20 * time.Second), Started: ago(20 * time.Second), Duration: 15, User: "bob", Commit: "Add completion command",
+		Stages: []Stage{{"test", "failed"}}})
 	return s
 }

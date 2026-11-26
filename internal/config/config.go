@@ -22,7 +22,6 @@ type Config struct {
 	ListenAddr       string
 	TLSCertFile      string
 	TLSKeyFile       string
-	AppTitle         string
 	LogoFile         string
 	DefaultScope     *Scope
 	GroupFanoutLimit int
@@ -37,7 +36,6 @@ func Load(getenv func(string) string) (*Config, error) {
 		ListenAddr:   orDefault(getenv("LISTEN_ADDR"), ":8080"),
 		TLSCertFile:  getenv("TLS_CERT_FILE"),
 		TLSKeyFile:   getenv("TLS_KEY_FILE"),
-		AppTitle:     orDefault(getenv("APP_TITLE"), "Pipelines"),
 		LogoFile:     getenv("LOGO_FILE"),
 	}
 

@@ -7,7 +7,7 @@ import {
   IconLock,
   IconSubtask,
 } from "@tabler/icons-react";
-import type { Pipeline } from "./api";
+import type { MRRef, Pipeline } from "./api";
 import { elapsedSince, formatDuration, fullTime, timeAgo } from "./format";
 import { StatusBadge, toneOf } from "./status";
 
@@ -69,12 +69,13 @@ export function PipelineRow({ p, depth, showProject, expanded, children, onToggl
                 {p.project.path}
               </a>
             )}
-            {p.ref && (
-              <span className="chip">
+            {(p.branch || p.ref) && !(p.mergeRequest && p.branch === `!${p.mergeRequest.iid}`) && (
+              <span className="chip" title={p.ref}>
                 <IconGitBranch size={12} aria-hidden />
-                {p.ref}
+                {p.branch || p.ref}
               </span>
             )}
+            {p.mergeRequest && <MRChip mr={p.mergeRequest} />}
             {shortSha && <span className="mono dim">{shortSha}</span>}
             {p.user && (
               <span className="user" title={`${p.user.name} (@${p.user.username})`}>
@@ -85,6 +86,11 @@ export function PipelineRow({ p, depth, showProject, expanded, children, onToggl
             {p.upstream && depth === 0 && (
               <a className="dim small link" href={p.upstream.webUrl} target="_blank" rel="noopener noreferrer">
                 <IconArrowBackUp size={13} aria-hidden /> triggered by {p.upstream.projectPath} #{p.upstream.id}
+              </a>
+            )}
+            {p.parent && (
+              <a className="dim small link" href={p.parent.webUrl} target="_blank" rel="noopener noreferrer">
+                <IconArrowBackUp size={13} aria-hidden /> from {p.parent.title} #{p.parent.id}
               </a>
             )}
             {canExpand && (
@@ -143,6 +149,26 @@ function ChildRows({ state, depth, ...rest }: Omit<Props, "p"> & { state?: Child
       {state.items.map((c) => (
         <PipelineRow key={c.key} p={c} depth={depth} {...rest} />
       ))}
+    </>
+  );
+}
+
+// MRChip links to the merge request a pipeline runs for.
+export function MRChip({ mr, showTarget }: { mr: MRRef; showTarget?: boolean }) {
+  const label = `!${mr.iid}`;
+  const title = mr.title ? `${label}: ${mr.title}` : `Merge request ${label}`;
+  return (
+    <>
+      {mr.webUrl ? (
+        <a className="chip chip-mr" href={mr.webUrl} target="_blank" rel="noopener noreferrer" title={title} onClick={(e) => e.stopPropagation()}>
+          {label}
+        </a>
+      ) : (
+        <span className="chip chip-mr" title={title}>
+          {label}
+        </span>
+      )}
+      {showTarget && mr.targetBranch && <span className="dim small">→ {mr.targetBranch}</span>}
     </>
   );
 }

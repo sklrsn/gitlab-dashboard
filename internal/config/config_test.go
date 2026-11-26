@@ -16,7 +16,7 @@ func TestLoadDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	if c.GitLabURL.String() != "https://gitlab.example.com" || c.GitLabToken != "tok" || c.ListenAddr != ":8080" ||
-		c.AppTitle != "Pipelines" || c.GroupFanoutLimit != 50 || c.CacheTTL != 10*time.Second || c.DefaultScope != nil {
+		c.GroupFanoutLimit != 50 || c.CacheTTL != 10*time.Second || c.DefaultScope != nil {
 		t.Errorf("unexpected defaults: %+v", c)
 	}
 }

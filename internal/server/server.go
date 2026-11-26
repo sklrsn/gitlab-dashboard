@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"strconv"
@@ -48,6 +49,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/scopes", s.handleScopes)
 	mux.HandleFunc("GET /api/pipelines", s.handlePipelines)
 	mux.HandleFunc("GET /api/children", s.handleChildren)
+	mux.HandleFunc("GET /api/scope", s.handleScope)
+	mux.HandleFunc("GET /api/groups", s.handleGroups)
+	mux.HandleFunc("GET /api/runs", s.handleRuns)
 	mux.HandleFunc("GET /logo", s.handleLogo)
 	mux.HandleFunc("GET /api/", func(w http.ResponseWriter, _ *http.Request) {
 		writeErr(w, http.StatusNotFound, "unknown API endpoint")
@@ -57,7 +61,6 @@ func (s *Server) Handler() http.Handler {
 }
 
 type configResp struct {
-	Title        string        `json:"title"`
 	HasLogo      bool          `json:"hasLogo"`
 	GitLabURL    string        `json:"gitlabUrl"`
 	DefaultScope *config.Scope `json:"defaultScope,omitempty"`
@@ -65,7 +68,6 @@ type configResp struct {
 
 func (s *Server) handleConfig(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, configResp{
-		Title:        s.cfg.AppTitle,
 		HasLogo:      s.logo != nil,
 		GitLabURL:    s.cfg.GitLabURL.String(),
 		DefaultScope: s.cfg.DefaultScope,
@@ -131,6 +133,85 @@ func (s *Server) handleChildren(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, kids)
 }
 
+// scopeParam reads ?group= or ?project= with a valid path.
+func scopeParam(q url.Values) (kind, path string, ok bool) {
+	if p := q.Get("project"); p != "" {
+		return "project", p, config.ValidPath(p)
+	}
+	if g := q.Get("group"); g != "" {
+		return "group", g, config.ValidPath(g)
+	}
+	return "", "", false
+}
+
+func (s *Server) handleScope(w http.ResponseWriter, r *http.Request) {
+	kind, p, ok := scopeParam(r.URL.Query())
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "pass a valid group or project path")
+		return
+	}
+	item, err := s.svc.Scope(r.Context(), kind, p)
+	if err != nil {
+		s.upstreamErr(w, r, err)
+		return
+	}
+	writeJSON(w, item)
+}
+
+func (s *Server) handleGroups(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	kind, p, ok := scopeParam(q)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "pass a valid group or project path")
+		return
+	}
+	by := q.Get("by")
+	if !dashboard.GroupByKinds[by] || (by == "project" && kind != "group") {
+		writeErr(w, http.StatusBadRequest, "unknown grouping")
+		return
+	}
+	win, err := dashboard.ParseWindow(q.Get("window"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	f := dashboard.Filter{Ref: strings.TrimSpace(q.Get("ref")), Status: q.Get("status")}
+	if len(f.Ref) > 255 {
+		writeErr(w, http.StatusBadRequest, "ref is too long")
+		return
+	}
+	open := map[string]bool{}
+	for _, k := range q["open"] {
+		if len(open) >= 20 || len(k) > 600 {
+			writeErr(w, http.StatusBadRequest, "too many open groups")
+			return
+		}
+		open[k] = true
+	}
+	page, err := s.svc.GroupedPage(r.Context(), kind, p, by, win, f, open)
+	if err != nil {
+		s.upstreamErr(w, r, err)
+		return
+	}
+	writeJSON(w, page)
+}
+
+func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	project, name := q.Get("project"), q.Get("name")
+	page, err := strconv.Atoi(q.Get("page"))
+	if !config.ValidPath(project) || name == "" || len(name) > 255 || err != nil || page < 1 || page > 50 {
+		writeErr(w, http.StatusBadRequest, "pass a valid project, name and page")
+		return
+	}
+	out, err := s.svc.OlderRuns(r.Context(), project, name, page)
+	if err != nil {
+		s.upstreamErr(w, r, err)
+		return
+	}
+	writeJSON(w, out)
+}
+
 func (s *Server) handleLogo(w http.ResponseWriter, r *http.Request) {
 	if s.logo == nil {
 		http.NotFound(w, r)
@@ -174,7 +255,7 @@ func (s *Server) handleUI(w http.ResponseWriter, r *http.Request) {
 func (s *Server) upstreamErr(w http.ResponseWriter, r *http.Request, err error) {
 	var ge *gitlab.Error
 	if !errors.As(err, &ge) {
-		if strings.HasPrefix(err.Error(), "unknown status") {
+		if msg := err.Error(); strings.HasPrefix(msg, "unknown status") || strings.HasPrefix(msg, "unknown grouping") {
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}

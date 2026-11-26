@@ -23,7 +23,7 @@ func newTestServer(t *testing.T) *httptest.Server {
 	fake := httptest.NewServer(fakegitlab.Demo("tok", time.Now()))
 	t.Cleanup(fake.Close)
 	u, _ := url.Parse(fake.URL)
-	cfg := &config.Config{GitLabURL: u, GitLabToken: "tok", AppTitle: "Team CI", DefaultScope: &config.Scope{Kind: "group", Path: "platform"}}
+	cfg := &config.Config{GitLabURL: u, GitLabToken: "tok", DefaultScope: &config.Scope{Kind: "group", Path: "platform"}}
 	gl, _ := gitlab.New(gitlab.Options{BaseURL: u, Token: "tok", Timeout: 5 * time.Second})
 	ui := fstest.MapFS{
 		"index.html":    {Data: []byte("<html>app</html>")},
@@ -57,7 +57,7 @@ func TestConfigEndpoint(t *testing.T) {
 	}
 	var c map[string]any
 	json.Unmarshal([]byte(body), &c)
-	if c["title"] != "Team CI" || c["hasLogo"] != false || c["defaultScope"].(map[string]any)["path"] != "platform" {
+	if c["title"] != nil || c["hasLogo"] != false || c["defaultScope"].(map[string]any)["path"] != "platform" {
 		t.Errorf("config = %v", c)
 	}
 	if strings.Contains(body, "tok") {
@@ -147,5 +147,34 @@ func TestUIAndHeaders(t *testing.T) {
 	resp, _ = get(t, ts, "/healthz")
 	if resp.StatusCode != 200 {
 		t.Error("healthz")
+	}
+}
+
+func TestGroupedEndpoints(t *testing.T) {
+	ts := newTestServer(t)
+	for path, want := range map[string]int{
+		"/api/groups?project=platform/api&by=name":                      200,
+		"/api/groups?group=platform&by=project&window=7d":               200,
+		"/api/groups?project=platform/api&by=child&window=24h&open=c:x": 200,
+		"/api/groups?project=platform/api&by=project":                   400,
+		"/api/groups?project=platform/api&by=bogus":                     400,
+		"/api/groups?project=platform/api&by=name&window=1y":            400,
+		"/api/groups?by=name":                                           400,
+		"/api/scope?group=platform":                                     200,
+		"/api/scope?project=secret/vault":                               404,
+		"/api/scope?project=../etc":                                     400,
+		"/api/runs?project=platform/api&name=Nightly%20release&page=1":  200,
+		"/api/runs?project=platform/api&name=Nightly%20release&page=0":  400,
+		"/api/runs?project=platform/api&page=1":                         400,
+	} {
+		if resp, body := get(t, ts, path); resp.StatusCode != want {
+			t.Errorf("%s: got %d want %d: %s", path, resp.StatusCode, want, body)
+		}
+	}
+	_, body := get(t, ts, "/api/scope?project=platform/api")
+	var item map[string]any
+	json.Unmarshal([]byte(body), &item)
+	if item["name"] != "Platform / Api" || item["kind"] != "project" {
+		t.Errorf("scope: %s", body)
 	}
 }

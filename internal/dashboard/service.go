@@ -68,10 +68,47 @@ type Service struct {
 	fanout int
 	short  *cache.Cache
 	long   *cache.Cache
+	now    func() time.Time
+	mrs    mrStore
 }
 
 func NewService(gl *gitlab.Client, ttl time.Duration, fanout int) *Service {
-	return &Service{gl: gl, base: gl.BaseURL(), fanout: fanout, short: cache.New(ttl), long: cache.New(5 * time.Minute)}
+	return &Service{gl: gl, base: gl.BaseURL(), fanout: fanout, short: cache.New(ttl), long: cache.New(5 * time.Minute), now: time.Now, mrs: mrStore{m: map[string]mrEntry{}}}
+}
+
+func (s *Service) groupProjects(ctx context.Context, group string) ([]gitlab.Project, error) {
+	return cache.Do(ctx, s.long, "gp|"+group+"|"+strconv.Itoa(s.fanout), func(ctx context.Context) ([]gitlab.Project, error) {
+		return s.gl.GroupProjects(ctx, group, s.fanout)
+	})
+}
+
+func (s *Service) groupWarnings(projects int, failed []string) []string {
+	var out []string
+	if len(failed) > 0 {
+		out = append(out, fmt.Sprintf("%d project(s) could not be loaded: %s", len(failed), strings.Join(first(failed, 5), ", ")))
+	}
+	if projects == s.fanout {
+		out = append(out, fmt.Sprintf("Showing the %d most recently active projects in this group. Pick a project to see others.", s.fanout))
+	}
+	return out
+}
+
+// Scope returns the display name and GitLab link of a group or project.
+func (s *Service) Scope(ctx context.Context, kind, path string) (ScopeItem, error) {
+	return cache.Do(ctx, s.long, "si|"+kind+"|"+path, func(ctx context.Context) (ScopeItem, error) {
+		if kind == "group" {
+			g, err := s.gl.GetGroup(ctx, path)
+			if err != nil {
+				return ScopeItem{}, err
+			}
+			return ScopeItem{Kind: kind, Path: orStr(g.FullPath, path), Name: orStr(g.FullName, path), WebURL: g.WebURL}, nil
+		}
+		p, err := s.gl.GetProject(ctx, path)
+		if err != nil {
+			return ScopeItem{}, err
+		}
+		return ScopeItem{Kind: kind, Path: orStr(p.PathWithNamespace, path), Name: orStr(p.NameWithNamespace, path), WebURL: p.WebURL}, nil
+	})
 }
 
 func (s *Service) projectPipelines(ctx context.Context, path string, first int, after string, f gitlab.PipelineFilter) (gitlab.PipelinePage, error) {
@@ -111,6 +148,7 @@ func (s *Service) ProjectPage(ctx context.Context, path string, f Filter, after 
 	if out.Pipelines == nil {
 		out.Pipelines = []Pipeline{}
 	}
+	s.resolveMRs(ctx, out.Pipelines)
 	return out, nil
 }
 
@@ -122,64 +160,44 @@ func (s *Service) GroupPage(ctx context.Context, group string, f Filter, limit i
 		return Page{}, err
 	}
 	limit = min(max(limit, pageSize), maxGroupRows)
-	projects, err := cache.Do(ctx, s.long, "gp|"+group+"|"+strconv.Itoa(s.fanout), func(ctx context.Context) ([]gitlab.Project, error) {
-		return s.gl.GroupProjects(ctx, group, s.fanout)
-	})
+	projects, err := s.groupProjects(ctx, group)
 	if err != nil {
 		return Page{}, err
 	}
 
+	// Page through each project until it has `limit` top-level pipelines, since
+	// child pipelines can crowd them out of the newest raw results.
 	type result struct {
-		page gitlab.PipelinePage
+		runs []gitlab.Pipeline
+		more bool
 		err  error
 	}
 	results := make([]result, len(projects))
-	sem := make(chan struct{}, fanoutParallel)
-	var wg sync.WaitGroup
-	for i, p := range projects {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			pg, err := s.projectPipelines(ctx, p.PathWithNamespace, limit, "", gf)
-			results[i] = result{pg, err}
-		}()
-	}
-	wg.Wait()
+	keep := topLevel(group)
+	parallel(len(projects), func(i int) {
+		runs, complete, err := s.projectWindow(ctx, projects[i].PathWithNamespace, Window{Count: limit}, time.Time{}, gf, groupWindowPages, keep)
+		results[i] = result{runs, !complete || len(runs) >= limit, err}
+	})
 
 	out := Page{Projects: len(projects), Pipelines: []Pipeline{}}
 	var failed []string
 	var firstErr error
 	moreUpstream := false
-	prefix := group + "/"
 	for i, r := range results {
 		if r.err != nil {
 			failed = append(failed, projects[i].PathWithNamespace)
 			firstErr = cmpErr(firstErr, r.err)
 			continue
 		}
-		moreUpstream = moreUpstream || r.page.HasNextPage
-		for _, p := range r.page.Pipelines {
-			if p.Source == "parent_pipeline" {
-				continue
-			}
-			// Downstream pipelines whose parent is in this group show up under that parent.
-			if p.Source == "pipeline" && p.Upstream != nil && strings.HasPrefix(p.Upstream.Project.FullPath, prefix) {
-				continue
-			}
+		moreUpstream = moreUpstream || r.more
+		for _, p := range r.runs {
 			out.Pipelines = append(out.Pipelines, convert(s.base, p))
 		}
 	}
 	if len(projects) > 0 && len(failed) == len(projects) {
 		return Page{}, firstErr
 	}
-	if len(failed) > 0 {
-		out.Warnings = append(out.Warnings, fmt.Sprintf("%d project(s) could not be loaded: %s", len(failed), strings.Join(first(failed, 5), ", ")))
-	}
-	if len(projects) == s.fanout {
-		out.Warnings = append(out.Warnings, fmt.Sprintf("Showing the %d most recently active projects in this group. Pick a project to see others.", s.fanout))
-	}
+	out.Warnings = s.groupWarnings(len(projects), failed)
 
 	sort.Slice(out.Pipelines, func(i, j int) bool { return out.Pipelines[i].ID > out.Pipelines[j].ID })
 	if len(out.Pipelines) > limit {
@@ -191,6 +209,7 @@ func (s *Service) GroupPage(ctx context.Context, group string, f Filter, limit i
 	if limit >= maxGroupRows {
 		out.HasMore = false
 	}
+	s.resolveMRs(ctx, out.Pipelines)
 	return out, nil
 }
 
@@ -212,7 +231,9 @@ func (s *Service) Children(ctx context.Context, project, iid string, id int64) (
 		if downErr != nil && bridgErr != nil {
 			return nil, downErr
 		}
-		return mergeChildren(s.base, project, down, bridges), nil
+		kids := mergeChildren(s.base, project, down, bridges)
+		s.resolveMRs(ctx, kids)
+		return kids, nil
 	})
 }
 

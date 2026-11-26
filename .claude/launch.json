@@ -8,7 +8,6 @@
         "GITLAB_URL=http://localhost:8929",
         "GITLAB_TOKEN=dev-token",
         "DEFAULT_SCOPE=group:platform",
-        "APP_TITLE=Pipelines",
         "LISTEN_ADDR=localhost:8080",
         "./bin/gitlab-dashboard-darwin-arm64"
       ],

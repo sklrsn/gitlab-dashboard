@@ -11,3 +11,5 @@ deploy/docker/certs/
 *.pem
 *.key
 .DS_Store
+.gitlab-dashboard-token
+dashboard.sh

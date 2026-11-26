@@ -33,16 +33,38 @@ type Upstream struct {
 	WebURL      string `json:"webUrl"`
 }
 
+// ParentRef points from a child pipeline to the pipeline that started it,
+// used where children are listed away from their parent (grouped views).
+type ParentRef struct {
+	ID     int64  `json:"id"`
+	Title  string `json:"title"`
+	WebURL string `json:"webUrl"`
+}
+
+// MRRef is the merge request a merge request pipeline runs for. Only IID is
+// set when the merge request itself couldn't be read.
+type MRRef struct {
+	IID          int64  `json:"iid"`
+	Title        string `json:"title,omitempty"`
+	SourceBranch string `json:"sourceBranch,omitempty"`
+	TargetBranch string `json:"targetBranch,omitempty"`
+	WebURL       string `json:"webUrl,omitempty"`
+}
+
 type Pipeline struct {
-	Key          string     `json:"key"`
-	ID           int64      `json:"id,omitempty"`
-	IID          string     `json:"iid,omitempty"`
-	Name         string     `json:"name,omitempty"`
-	Title        string     `json:"title"`
-	Status       string     `json:"status"`
-	StatusLabel  string     `json:"statusLabel"`
-	Source       string     `json:"source,omitempty"`
-	Ref          string     `json:"ref,omitempty"`
+	Key         string `json:"key"`
+	ID          int64  `json:"id,omitempty"`
+	IID         string `json:"iid,omitempty"`
+	Name        string `json:"name,omitempty"`
+	Title       string `json:"title"`
+	Status      string `json:"status"`
+	StatusLabel string `json:"statusLabel"`
+	Source      string `json:"source,omitempty"`
+	Ref         string `json:"ref,omitempty"`
+	// Branch is what people call the ref: the source branch for merge request
+	// pipelines (refs/merge-requests/N/merge), "!N" if that's unknown, else Ref.
+	Branch       string     `json:"branch,omitempty"`
+	MergeRequest *MRRef     `json:"mergeRequest,omitempty"`
 	SHA          string     `json:"sha,omitempty"`
 	WebURL       string     `json:"webUrl"`
 	Project      ProjectRef `json:"project"`
@@ -57,6 +79,7 @@ type Pipeline struct {
 	Upstream     *Upstream  `json:"upstream,omitempty"`
 	TriggerJob   string     `json:"triggerJob,omitempty"`
 	CrossProject bool       `json:"crossProject,omitempty"`
+	Parent       *ParentRef `json:"parent,omitempty"`
 	// Limited marks a child the token can't read in detail; only bridge data is known.
 	Limited bool `json:"limited,omitempty"`
 }
@@ -72,6 +95,7 @@ func convert(base *url.URL, p gitlab.Pipeline) Pipeline {
 		StatusLabel: p.DetailedStatus.Label,
 		Source:      p.Source,
 		Ref:         p.Ref,
+		Branch:      p.Ref,
 		SHA:         p.SHA,
 		WebURL:      absURL(base, p.Path),
 		Project:     ProjectRef{Path: p.Project.FullPath, Name: p.Project.Name, WebURL: p.Project.WebURL},

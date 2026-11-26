@@ -6,7 +6,9 @@ export function ScopeIcon({ kind, size = 15 }: { kind: Scope["kind"]; size?: num
   return kind === "group" ? <IconUsers size={size} aria-hidden /> : <IconFolder size={size} aria-hidden />;
 }
 
-export function ScopePicker({ value, onChange }: { value?: Scope; onChange: (s: Scope) => void }) {
+// ScopePicker is the page title: the chosen group or project's name, which
+// opens a search to switch scope.
+export function ScopePicker({ value, name, onChange }: { value?: Scope; name?: string; onChange: (s: Scope) => void }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [items, setItems] = useState<ScopeItem[]>([]);
@@ -70,17 +72,24 @@ export function ScopePicker({ value, onChange }: { value?: Scope; onChange: (s: 
 
   return (
     <div className="scope" ref={rootRef}>
-      <button className="scope-btn" onClick={() => setOpen((o) => !o)} aria-haspopup="listbox" aria-expanded={open}>
+      <button
+        className="scope-title"
+        onClick={() => setOpen((o) => !o)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        title={value ? `${value.kind}: ${value.path} (click to switch)` : undefined}
+      >
         {value ? (
           <>
-            <ScopeIcon kind={value.kind} />
-            <span className="scope-kind">{value.kind}:</span>
-            <span className="scope-path">{value.path}</span>
+            <span className="scope-icon">
+              <ScopeIcon kind={value.kind} size={18} />
+            </span>
+            <span className="scope-name">{name || value.path}</span>
           </>
         ) : (
-          <span>Choose a group or project</span>
+          <span className="scope-name">Choose a group or project</span>
         )}
-        <IconChevronDown size={15} aria-hidden />
+        <IconChevronDown size={17} aria-hidden className="scope-caret" />
       </button>
       {open && (
         <div className="scope-pop">
